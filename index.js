@@ -10,17 +10,20 @@ const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio
 const { z } = require('zod');
 
 // Redirect console.log to stderr
-const originalConsoleLog = console.log;
 console.log = (...args) => console.error(...args);
+
+// Shared exec environment with extended PATH for unix
+const EXEC_ENV = process.platform === 'win32'
+  ? { env: process.env }
+  : { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } };
 
 // Dynamically locate tshark
 async function findTshark() {
-  // 1) 사용자가 직접 지정한 경로를 최우선
+  // 1) TSHARK_PATH 환경변수 우선
   const envPath = process.env.TSHARK_PATH;
   if (envPath) {
     try {
       await fs.access(envPath);
-      await execAsync(`"${envPath}" -v`);
       console.error(`Found tshark from TSHARK_PATH: ${envPath}`);
       return envPath;
     } catch (e) {
@@ -37,27 +40,21 @@ async function findTshark() {
     console.error('which failed to find tshark:', err.message);
   }
 
-  // 3) 기본 설치 경로 fallback
+  // 3) 기본 설치 경로 fallback (파일 존재 여부로 확인)
   const fallbacks = process.platform === 'win32'
     ? [
         'C:\\Program Files\\Wireshark\\tshark.exe',
-        'C:\\Program Files (x86)\\Wireshark\\tshark.exe'
+        'C:\\Program Files (x86)\\Wireshark\\tshark.exe',
       ]
-    : [
-        '/usr/bin/tshark',
-        '/usr/local/bin/tshark',
-        '/opt/homebrew/bin/tshark',
-        '/Applications/Wireshark.app/Contents/MacOS/tshark'
-      ];
+    : ['/usr/bin/tshark', '/usr/local/bin/tshark', '/opt/homebrew/bin/tshark', '/Applications/Wireshark.app/Contents/MacOS/tshark'];
 
-  for (const fallbackPath of fallbacks) {
+  for (const candidate of fallbacks) {
     try {
-      await fs.access(fallbackPath);
-      await execAsync(`"${fallbackPath}" -v`);
-      console.error(`Found tshark at fallback: ${fallbackPath}`);
-      return fallbackPath;
+      await fs.access(candidate);
+      console.error(`Found tshark at fallback: ${candidate}`);
+      return candidate;
     } catch (e) {
-      console.error(`Fallback ${fallbackPath} failed: ${e.message}`);
+      console.error(`Fallback ${candidate} not found: ${e.message}`);
     }
   }
 
@@ -88,13 +85,13 @@ server.tool(
       console.error(`Capturing packets on ${interface} for ${duration}s`);
 
       await execAsync(
-        `${tsharkPath} -i ${interface} -w ${tempPcap} -a duration:${duration}`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -i ${interface} -w ${tempPcap} -a duration:${duration}`,
+        EXEC_ENV
       );
 
       const { stdout, stderr } = await execAsync(
-        `${tsharkPath} -r "${tempPcap}" -T json -e frame.number -e ip.src -e ip.dst -e tcp.srcport -e tcp.dstport -e tcp.flags -e frame.time -e http.request.method -e http.response.code`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -r "${tempPcap}" -T json -e frame.number -e ip.src -e ip.dst -e tcp.srcport -e tcp.dstport -e tcp.flags -e frame.time -e http.request.method -e http.response.code`,
+        EXEC_ENV
       );
       if (stderr) console.error(`tshark stderr: ${stderr}`);
       let packets = JSON.parse(stdout);
@@ -140,13 +137,13 @@ server.tool(
       console.error(`Capturing summary stats on ${interface} for ${duration}s`);
 
       await execAsync(
-        `${tsharkPath} -i ${interface} -w ${tempPcap} -a duration:${duration}`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -i ${interface} -w ${tempPcap} -a duration:${duration}`,
+        EXEC_ENV
       );
 
       const { stdout, stderr } = await execAsync(
-        `${tsharkPath} -r "${tempPcap}" -qz io,phs`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -r "${tempPcap}" -qz io,phs`,
+        EXEC_ENV
       );
       if (stderr) console.error(`tshark stderr: ${stderr}`);
 
@@ -181,13 +178,13 @@ server.tool(
       console.error(`Capturing conversations on ${interface} for ${duration}s`);
 
       await execAsync(
-        `${tsharkPath} -i ${interface} -w ${tempPcap} -a duration:${duration}`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -i ${interface} -w ${tempPcap} -a duration:${duration}`,
+        EXEC_ENV
       );
 
       const { stdout, stderr } = await execAsync(
-        `${tsharkPath} -r "${tempPcap}" -qz conv,tcp`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -r "${tempPcap}" -qz conv,tcp`,
+        EXEC_ENV
       );
       if (stderr) console.error(`tshark stderr: ${stderr}`);
 
@@ -222,39 +219,24 @@ server.tool(
       console.error(`Capturing traffic on ${interface} for ${duration}s to check threats`);
 
       await execAsync(
-        `${tsharkPath} -i ${interface} -w ${tempPcap} -a duration:${duration}`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -i ${interface} -w ${tempPcap} -a duration:${duration}`,
+        EXEC_ENV
       );
 
       const { stdout } = await execAsync(
-        `${tsharkPath} -r "${tempPcap}" -T fields -e ip.src -e ip.dst`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -r "${tempPcap}" -T fields -e ip.src -e ip.dst`,
+        EXEC_ENV
       );
       const ips = [...new Set(stdout.split('\n').flatMap(line => line.split('\t')).filter(ip => ip && ip !== 'unknown'))];
       console.error(`Captured ${ips.length} unique IPs: ${ips.join(', ')}`);
 
-      const urlhausUrl = 'https://urlhaus.abuse.ch/downloads/text/';
-      console.error(`Fetching URLhaus blacklist from ${urlhausUrl}`);
-      let urlhausData;
       let urlhausThreats = [];
       try {
-        const response = await axios.get(urlhausUrl);
-        console.error(`URLhaus response status: ${response.status}, length: ${response.data.length} chars`);
-        console.error(`URLhaus raw data (first 200 chars): ${response.data.slice(0, 200)}`);
-        const ipRegex = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
-        urlhausData = [...new Set(response.data.split('\n')
-          .map(line => {
-            const match = line.match(ipRegex);
-            return match ? match[0] : null;
-          })
-          .filter(ip => ip))];
-        console.error(`URLhaus lookup successful: ${urlhausData.length} blacklist IPs fetched`);
-        console.error(`Sample URLhaus IPs: ${urlhausData.slice(0, 5).join(', ') || 'None'}`);
+        const urlhausData = await fetchURLhausBlacklist();
         urlhausThreats = ips.filter(ip => urlhausData.includes(ip));
         console.error(`Checked IPs against URLhaus: ${urlhausThreats.length} threats found - ${urlhausThreats.join(', ') || 'None'}`);
       } catch (e) {
         console.error(`Failed to fetch URLhaus data: ${e.message}`);
-        urlhausData = [];
       }
 
       const outputText = `Captured IPs:\n${ips.join('\n')}\n\n` +
@@ -286,28 +268,13 @@ server.tool(
       const { ip } = args;
       console.error(`Checking IP ${ip} against URLhaus blacklist`);
 
-      const urlhausUrl = 'https://urlhaus.abuse.ch/downloads/text/';
-      console.error(`Fetching URLhaus blacklist from ${urlhausUrl}`);
-      let urlhausData;
       let isThreat = false;
       try {
-        const response = await axios.get(urlhausUrl);
-        console.error(`URLhaus response status: ${response.status}, length: ${response.data.length} chars`);
-        console.error(`URLhaus raw data (first 200 chars): ${response.data.slice(0, 200)}`);
-        const ipRegex = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
-        urlhausData = [...new Set(response.data.split('\n')
-          .map(line => {
-            const match = line.match(ipRegex);
-            return match ? match[0] : null;
-          })
-          .filter(ip => ip))];
-        console.error(`URLhaus lookup successful: ${urlhausData.length} blacklist IPs fetched`);
-        console.error(`Sample URLhaus IPs: ${urlhausData.slice(0, 5).join(', ') || 'None'}`);
+        const urlhausData = await fetchURLhausBlacklist();
         isThreat = urlhausData.includes(ip);
         console.error(`IP ${ip} checked against URLhaus: ${isThreat ? 'Threat found' : 'No threat found'}`);
       } catch (e) {
         console.error(`Failed to fetch URLhaus data: ${e.message}`);
-        urlhausData = [];
       }
 
       const outputText = `IP checked: ${ip}\n\n` +
@@ -343,8 +310,8 @@ server.tool(
 
       // Extract broad packet data
       const { stdout, stderr } = await execAsync(
-        `${tsharkPath} -r "${pcapPath}" -T json -e frame.number -e ip.src -e ip.dst -e tcp.srcport -e tcp.dstport -e udp.srcport -e udp.dstport -e http.host -e http.request.uri -e frame.protocols`,
-        { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+        `"${tsharkPath}" -r "${pcapPath}" -T json -e frame.number -e ip.src -e ip.dst -e tcp.srcport -e tcp.dstport -e udp.srcport -e udp.dstport -e http.host -e http.request.uri -e frame.protocols`,
+        EXEC_ENV
       );
       if (stderr) console.error(`tshark stderr: ${stderr}`);
       const packets = JSON.parse(stdout);
@@ -401,19 +368,19 @@ server.tool(
         const tsharkPath = await findTshark();
         const { pcapPath } = args;
         console.error(`Extracting credentials from PCAP file: ${pcapPath}`);
-  
+
         await fs.access(pcapPath);
-  
+
         // Extract plaintext credentials
         const { stdout: plaintextOut } = await execAsync(
-          `${tsharkPath} -r "${pcapPath}" -T fields -e http.authbasic -e ftp.request.command -e ftp.request.arg -e telnet.data -e frame.number`,
-          { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+          `"${tsharkPath}" -r "${pcapPath}" -T fields -e http.authbasic -e ftp.request.command -e ftp.request.arg -e telnet.data -e frame.number`,
+          EXEC_ENV
         );
 
         // Extract Kerberos credentials
         const { stdout: kerberosOut } = await execAsync(
-          `${tsharkPath} -r "${pcapPath}" -T fields -e kerberos.CNameString -e kerberos.realm -e kerberos.cipher -e kerberos.type -e kerberos.msg_type -e frame.number`,
-          { env: { ...process.env, PATH: `${process.env.PATH}:/usr/bin:/usr/local/bin:/opt/homebrew/bin` } }
+          `"${tsharkPath}" -r "${pcapPath}" -T fields -e kerberos.CNameString -e kerberos.realm -e kerberos.cipher -e kerberos.type -e kerberos.msg_type -e frame.number`,
+          EXEC_ENV
         );
 
         const lines = plaintextOut.split('\n').filter(line => line.trim());
@@ -427,12 +394,12 @@ server.tool(
             frameNumber: frameNumber || ''
           };
         });
-  
+
         const credentials = {
           plaintext: [],
           encrypted: []
         };
-  
+
         // Process HTTP Basic Auth
         packets.forEach(p => {
           if (p.authBasic) {
@@ -440,7 +407,7 @@ server.tool(
             credentials.plaintext.push({ type: 'HTTP Basic Auth', username, password, frame: p.frameNumber });
           }
         });
-  
+
         // Process FTP
         packets.forEach(p => {
           if (p.ftpCmd === 'USER') {
@@ -451,7 +418,7 @@ server.tool(
             if (lastUser) lastUser.password = p.ftpArg;
           }
         });
-  
+
         // Process Telnet
         packets.forEach(p => {
           if (p.telnetData) {
@@ -475,7 +442,7 @@ server.tool(
         const kerberosLines = kerberosOut.split('\n').filter(line => line.trim());
         kerberosLines.forEach(line => {
           const [cname, realm, cipher, type, msgType, frameNumber] = line.split('\t');
-          
+
           if (cipher && type) {
             let hashFormat = '';
             // Format hash based on message type
@@ -505,14 +472,14 @@ server.tool(
         });
 
         console.error(`Found ${credentials.plaintext.length} plaintext and ${credentials.encrypted.length} encrypted credentials`);
-  
+
         const outputText = `Analyzed PCAP: ${pcapPath}\n\n` +
-          `Plaintext Credentials:\n${credentials.plaintext.length > 0 ? 
-            credentials.plaintext.map(c => 
-              c.type === 'Telnet Prompt' ? 
-                `${c.type}: ${c.data} (Frame ${c.frame})` : 
+          `Plaintext Credentials:\n${credentials.plaintext.length > 0 ?
+            credentials.plaintext.map(c =>
+              c.type === 'Telnet Prompt' ?
+                `${c.type}: ${c.data} (Frame ${c.frame})` :
                 `${c.type}: ${c.username}:${c.password} (Frame ${c.frame})`
-            ).join('\n') : 
+            ).join('\n') :
             'None'}\n\n` +
           `Encrypted/Hashed Credentials:\n${credentials.encrypted.length > 0 ?
             credentials.encrypted.map(c =>
@@ -525,7 +492,7 @@ server.tool(
           `For Kerberos hashes:\n` +
           `- AS-REQ/TGS-REQ: hashcat -m 7500 or john --format=krb5pa-md5\n` +
           `- AS-REP: hashcat -m 18200 or john --format=krb5asrep`;
-  
+
         return {
           content: [{ type: 'text', text: outputText }],
         };
