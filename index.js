@@ -15,27 +15,55 @@ console.log = (...args) => console.error(...args);
 
 // Dynamically locate tshark
 async function findTshark() {
+  // 1) 사용자가 직접 지정한 경로를 최우선
+  const envPath = process.env.TSHARK_PATH;
+  if (envPath) {
+    try {
+      await fs.access(envPath);
+      await execAsync(`"${envPath}" -v`);
+      console.error(`Found tshark from TSHARK_PATH: ${envPath}`);
+      return envPath;
+    } catch (e) {
+      console.error(`TSHARK_PATH failed: ${e.message}`);
+    }
+  }
+
+  // 2) PATH에서 탐색
   try {
     const tsharkPath = await which('tshark');
     console.error(`Found tshark at: ${tsharkPath}`);
     return tsharkPath;
   } catch (err) {
     console.error('which failed to find tshark:', err.message);
-    const fallbacks = process.platform === 'win32'
-      ? ['C:\\Program Files\\Wireshark\\tshark.exe', 'C:\\Program Files (x86)\\Wireshark\\tshark.exe']
-      : ['/usr/bin/tshark', '/usr/local/bin/tshark', '/opt/homebrew/bin/tshark', '/Applications/Wireshark.app/Contents/MacOS/tshark'];
-    
-    for (const path of fallbacks) {
-      try {
-        await execAsync(`${path} -v`);
-        console.error(`Found tshark at fallback: ${path}`);
-        return path;
-      } catch (e) {
-        console.error(`Fallback ${path} failed: ${e.message}`);
-      }
-    }
-    throw new Error('tshark not found. Please install Wireshark (https://www.wireshark.org/download.html) and ensure tshark is in your PATH.');
   }
+
+  // 3) 기본 설치 경로 fallback
+  const fallbacks = process.platform === 'win32'
+    ? [
+        'C:\\Program Files\\Wireshark\\tshark.exe',
+        'C:\\Program Files (x86)\\Wireshark\\tshark.exe'
+      ]
+    : [
+        '/usr/bin/tshark',
+        '/usr/local/bin/tshark',
+        '/opt/homebrew/bin/tshark',
+        '/Applications/Wireshark.app/Contents/MacOS/tshark'
+      ];
+
+  for (const fallbackPath of fallbacks) {
+    try {
+      await fs.access(fallbackPath);
+      await execAsync(`"${fallbackPath}" -v`);
+      console.error(`Found tshark at fallback: ${fallbackPath}`);
+      return fallbackPath;
+    } catch (e) {
+      console.error(`Fallback ${fallbackPath} failed: ${e.message}`);
+    }
+  }
+
+  throw new Error(
+    'tshark not found. Set TSHARK_PATH to tshark.exe full path or install Wireshark and add tshark to PATH.'
+  );
 }
 
 // Initialize MCP server
